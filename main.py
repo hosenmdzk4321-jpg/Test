@@ -1,23 +1,18 @@
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware 
 from pydantic import BaseModel, Field
 import joblib
 import os
 
-# --- 💡 Component Loading ---
-# The model is now assumed to be split into two files:
-# 1. vectorizer.pkl (TfidfVectorizer instance, fitted)
-# 2. classifier.pkl (PassiveAggressiveClassifier instance, trained)
-print("Loading model components... (first request may take 15-25 sec)")
+# --- Load the SINGLE Pipeline model at startup ---
+print("Loading model.pkl (Pipeline)... (first request may take 15-25 sec)")
 try:
-    # Load the vectorizer (needed to convert text input into features)
-    vectorizer = joblib.load("vectorizer.pkl")
-    # Load the classifier (the actual trained model)
-    classifier = joblib.load("classifier.pkl")
-    print("Model components loaded successfully!")
+    # Load the SINGLE file containing the full Pipeline (Vectorizer + Classifier)
+    model = joblib.load("model.pkl") 
+    print("Pipeline model loaded successfully!")
 except Exception as e:
-    print(f"ERROR loading components: {e}")
-    # Raise the error if components can't be loaded, preventing the API from starting broken
+    print(f"ERROR loading model: {e}")
+    # Raise the error if components can't be loaded
     raise
 
 # --- FastAPI App Setup ---
@@ -27,18 +22,16 @@ app = FastAPI(
     version="1.0"
 )
 
-# --- CORS Configuration ---
-# Allows requests from any origin, fixing the "405 Method Not Allowed" for OPTIONS preflight checks.
+# --- CORS Configuration (Fixes 405 OPTIONS error) ---
 origins = ["*"] 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods (GET, POST, OPTIONS)
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-# ----------------------------
+# ----------------------------------------------------
 
 class NewsInput(BaseModel):
     title: str = Field("", example="Hillary Clinton has died")
@@ -50,29 +43,25 @@ def home():
     return {
         "status": "API is LIVE",
         "model": "PassiveAggressive + TF-IDF (96% acc)",
-        "endpoint": "POST /predict",
-        "cors_enabled": True
+        "endpoint": "POST /predict"
     }
 
 @app.post("/predict")
 def predict(news: NewsInput):
-    """Processes text input, vectorizes it, and returns the prediction."""
+    """Processes text input using the Pipeline and returns the prediction."""
     if not news.title.strip() and not news.text.strip():
         raise HTTPException(status_code=400, detail="Please provide title or text")
         
     content = (news.title + " " + news.text).strip()
     
-    # --- 🎯 THE FIX: Vectorize input before predicting ---
-    # 1. Transform the raw text content into a numerical feature vector
-    feature_vector = vectorizer.transform([content])
-    
-    # 2. Predict using the numerical feature vector
-    prediction = classifier.predict(feature_vector)[0]
-    probas = classifier.predict_proba(feature_vector)[0]
+    # --- Prediction using the single Pipeline object ---
+    # The 'model' (Pipeline) now handles both vectorization and prediction internally
+    prediction = model.predict([content])[0]
+    probas = model.predict_proba([content])[0]
     # ----------------------------------------------------
     
     # Handle class order safely
-    classes = classifier.classes_
+    classes = model.classes_
     fake_idx = list(classes).index('Fake') if 'Fake' in classes else -1
     real_idx = list(classes).index('Real') if 'Real' in classes else -1
     
@@ -83,5 +72,5 @@ def predict(news: NewsInput):
         "fake_probability": round(float(probas[fake_idx]), 4) if fake_idx != -1 else 0.0,
         "real_probability": round(float(probas[real_idx]), 4) if real_idx != -1 else 0.0,
         "input_words": len(content.split()),
-        "model_info": "PassiveAggressive + TF-IDF"
+        "model_info": "PassiveAggressive + TF-IDF (via Pipeline)"
     }
